@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PathFinder PH - Location Alarm & Navigator</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Tone.js for web audio alarm synth -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Map Container Custom Styling */
+        #map {
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        
+        /* Custom Pulse Animation for Live Location Marker */
+        @keyframes user-pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(59, 130, 246, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+
+        .custom-user-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .user-location-marker {
+            width: 14px;
+            height: 14px;
+            background-color: #3b82f6;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            position: relative;
+            z-index: 5;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+
+        .user-location-pulse {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            background-color: rgba(59, 130, 246, 0.4);
+            border-radius: 50%;
+            animation: user-pulse 2s infinite;
+            z-index: 1;
+        }
+
+        .user-label {
+            position: absolute;
+            bottom: 32px;
+            background: #3b82f6;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: bold;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .user-label::after {
+            content: '';
+            position: absolute;
+            bottom: -4px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 4px solid #3b82f6;
+        }
+
+        .destination-marker {
+            color: #ef4444;
+            filter: drop-shadow(0px 3px 6px rgba(0,0,0,0.4));
+        }
+
+        /* Alarm Screen Pulse Effect */
+        @keyframes alarm-flash {
+            0%, 100% { background-color: rgba(239, 68, 68, 0.95); }
+            50% { background-color: rgba(185, 28, 28, 0.95); }
+        }
+
+        .alarm-active {
+            animation: alarm-flash 0.8s infinite;
+        }
+    </style>
+</head>
+<body class="h-full bg-slate-900 text-slate-100 flex flex-col font-sans overflow-hidden select-none">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-slate-800/90 backdrop-blur-md border-b border-slate-700/60 px-4 py-3 z-10 flex items-center justify-between shadow-md">
+        <div class="flex items-center space-x-2">
+            <div class="bg-gradient-to-tr from-blue-600 to-emerald-500 p-2 rounded-xl text-white shadow-lg shadow-emerald-500/20">
+                <i class="fa-solid font-bold fa-location-dot text-lg"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-none bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">PathFinder PH</h1>
+                <p class="text-[10px] text-slate-400 font-medium">Arrival Alert & Geofence Navigator</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-2">
+            <!-- Test Mode Toggle Switch -->
+            <button id="toggle-sim-btn" onclick="toggleSimulationMode()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-700/80 hover:bg-slate-700 text-slate-300 border border-slate-600 transition flex items-center gap-1.5">
+                <i class="fa-solid fa-gamepad text-amber-400"></i>
+                <span id="sim-btn-label">Simulate</span>
+            </button>
+            <button onclick="openHelpModal()" class="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700/50 transition">
+                <i class="fa-solid fa-circle-question text-lg"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area (Map + Floating Controls) -->
+    <main class="relative flex-1 w-full h-full">
+        <!-- Leaflet Map Canvas -->
+        <div id="map"></div>
+
+        <!-- Floating Search & Quick Actions Bar -->
+        <div class="absolute top-3 left-3 right-3 z-10 max-w-md mx-auto space-y-2">
+            <div class="relative flex items-center shadow-2xl">
+                <input type="text" id="search-input" placeholder="Search destination in PH (e.g., Makati, Cebu)..." 
+                       class="w-full bg-slate-800/95 backdrop-blur-md text-slate-100 placeholder-slate-400 text-sm rounded-xl pl-10 pr-10 py-3 border border-slate-700 shadow-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <i class="fa-solid fa-magnifying-glass absolute left-3.5 text-slate-400"></i>
+                <button onclick="clearSearch()" id="clear-search-btn" class="hidden absolute right-3 text-slate-400 hover:text-slate-200">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            
+            <!-- Search Results Dropdown -->
+            <div id="search-results" class="hidden bg-slate-800/95 border border-slate-700 rounded-xl max-h-48 overflow-y-auto shadow-2xl divide-y divide-slate-700/50 text-sm"></div>
+        </div>
+
+        <!-- Floating Map Control Buttons (Right Side) -->
+        <div class="absolute right-3 top-20 z-10 flex flex-col space-y-2">
+            <button onclick="recenterMap()" title="Center on My Location" class="w-10 h-10 bg-slate-800/90 text-slate-200 hover:text-blue-400 backdrop-blur-md rounded-xl border border-slate-700 shadow-xl flex items-center justify-center transition active:scale-95">
+                <i id="recenter-icon" class="fa-solid fa-crosshairs text-base"></i>
+            </button>
+            <button onclick="clearDestination()" title="Remove Destination" class="w-10 h-10 bg-slate-800/90 text-slate-200 hover:text-red-400 backdrop-blur-md rounded-xl border border-slate-700 shadow-xl flex items-center justify-center transition">
+                <i class="fa-solid fa-trash-can text-base"></i>
+            </button>
+        </div>
+
+        <!-- Simulation Speed / Controls (Visible only in Sim Mode) -->
+        <div id="sim-controls" class="hidden absolute left-3 top-20 z-10 bg-slate-800/90 backdrop-blur-md border border-amber-500/30 p-2.5 rounded-xl shadow-xl flex items-center space-x-2 text-xs">
+            <span class="text-amber-400 font-semibold flex items-center gap-1"><i class="fa-solid fa-person-walking"></i> Walk Sim</span>
+            <button onclick="stepSimulation()" class="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 px-2 py-1 rounded border border-amber-500/40 font-medium">
+                Step 50m Forward
+            </button>
+        </div>
+
+        <!-- Bottom Sheet Control Panel -->
+        <div class="absolute bottom-0 left-0 right-0 z-10 max-w-lg mx-auto p-3">
+            <div class="bg-slate-800/95 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 shadow-2xl">
+                <!-- Status Row -->
+                <div class="flex items-center justify-between pb-3 border-b border-slate-700/60">
+                    <div class="flex items-center space-x-2">
+                        <span id="status-indicator" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+                        <span id="status-text" class="text-xs font-medium text-slate-300">Searching for current location...</span>
+                    </div>
+                    <!-- Radius Selector -->
+                    <div class="flex items-center space-x-1 bg-slate-900/80 px-2 py-1 rounded-lg border border-slate-700/80">
+                        <i class="fa-solid fa-bullseye text-xs text-slate-400"></i>
+                        <label for="threshold-select" class="text-[11px] text-slate-400">Radius:</label>
+                        <select id="threshold-select" onchange="updateThreshold(this.value)" class="bg-transparent text-xs text-slate-200 font-bold focus:outline-none cursor-pointer">
+                            <option value="50">50 meters</option>
+                            <option value="100" selected>100 meters</option>
+                            <option value="200">200 meters</option>
+                            <option value="500">500 meters</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Distance Stats Display -->
+                <div class="grid grid-cols-2 gap-3 my-3">
+                    <div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/40">
+                        <div class="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Distance Remaining</div>
+                        <div id="distance-val" class="text-xl font-black text-emerald-400 mt-0.5">-- m</div>
+                    </div>
+                    <div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/40">
+                        <div class="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Est. Walking Time</div>
+                        <div id="eta-val" class="text-xl font-black text-blue-400 mt-0.5">-- min</div>
+                    </div>
+                </div>
+
+                <!-- Main Action Buttons -->
+                <div class="space-y-2">
+                    <button id="main-action-btn" onclick="startTrackingProcess()" class="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i class="fa-solid fa-play text-sm"></i>
+                        <span>ARM LOCATION ALARM</span>
+                    </button>
+                    <p class="text-[10px] text-center text-slate-400">Tap anywhere on the map or search above to set Point B.</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- FULL SCREEN ALARM OVERLAY -->
+    <div id="alarm-overlay" class="hidden fixed inset-0 z-50 flex flex-col items-center justify-center p-6 alarm-active text-white text-center">
+        <div class="bg-slate-900/90 backdrop-blur-lg p-8 rounded-3xl border border-red-500/50 max-w-sm w-full shadow-2xl flex flex-col items-center space-y-5">
+            <div class="w-20 h-20 bg-red-600/30 rounded-full flex items-center justify-center animate-bounce">
+                <i class="fa-solid fa-bell text-4xl text-red-400"></i>
+            </div>
+            <div>
+                <h2 class="text-2xl font-black uppercase tracking-wide text-red-400">You Have Arrived!</h2>
+                <p class="text-sm text-slate-300 mt-1">You are within your selected destination radius.</p>
+            </div>
+            <button onclick="stopAlarm()" class="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-black text-lg rounded-2xl shadow-xl transition transform active:scale-95">
+                DISMISS ALARM
+            </button>
+        </div>
+    </div>
+
+    <!-- HELP / PERMISSIONS MODAL -->
+    <div id="help-modal" class="hidden fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                <h3 class="font-bold text-lg text-slate-100 flex items-center gap-2">
+                    <i class="fa-solid fa-shield-halved text-emerald-400"></i>
+                    Permissions & Tips
+                </h3>
+                <button onclick="closeHelpModal()" class="text-slate-400 hover:text-slate-200">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+            <div class="space-y-3 text-xs text-slate-300 leading-relaxed">
+                <p class="flex items-start gap-2">
+                    <i class="fa-solid fa-shield-check text-blue-400 mt-0.5"></i>
+                    <span><strong>Security:</strong> Ensure you are using <strong>HTTPS</strong>. Browsers block location access on insecure connections.</span>
+                </p>
+                <p class="flex items-start gap-2">
+                    <i class="fa-solid fa-location-arrow text-blue-400 mt-0.5"></i>
+                    <span><strong>Geolocation:</strong> Allow high-accuracy location access when prompted so PathFinder PH can track your live movement.</span>
+                </p>
+                <p class="flex items-start gap-2">
+                    <i class="fa-solid fa-volume-high text-emerald-400 mt-0.5"></i>
+                    <span><strong>Audio Sound:</strong> Web browsers require user interaction before playing alarm sounds. Click <em>"ARM LOCATION ALARM"</em> to grant sound approval.</span>
+                </p>
+                <p class="flex items-start gap-2">
+                    <i class="fa-solid fa-mobile-screen-button text-amber-400 mt-0.5"></i>
+                    <span><strong>Vibration:</strong> Vibrations work on compatible mobile devices (Android).</span>
+                </p>
+                <p class="flex items-start gap-2">
+                    <i class="fa-solid fa-gamepad text-purple-400 mt-0.5"></i>
+                    <span><strong>Simulation Mode:</strong> Use the "Simulate" button at the top to test the app without physically moving around!</span>
+                </p>
+            </div>
+            <button onclick="closeHelpModal()" class="w-full py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-100 font-semibold rounded-xl text-xs transition">
+                Got it, let's start!
+            </button>
+        </div>
+    </div>
+
+    <!-- Application Core Script -->
+    <script>
+        // State Variables
+        let map, userMarker, destMarker, radiusCircle, geofenceLine, roadRouteLayer;
+        let userPos = null;         // { lat, lng }
+        let destPos = null;         // { lat, lng }
+        let lastRouteUpdate = 0;    // Timestamp for throttling
+        let arrivalRadius = 100;    // Meters
+        let isArmed = false;
+        let isSimulating = false;
+        let watchId = null;
+        let alarmSynth = null;
+        let alarmLoop = null;
+
+        // Default Philippines Coordinates (Manila Center Fallback)
+        const DEFAULT_LAT = 14.5995;
+        const DEFAULT_LNG = 120.9842;
+
+        // Initialize Map & Application on Load
+        window.onload = function() {
+            initMap();
+            setupSearch();
+            initGeolocation();
+        };
+
+        // Initialize Leaflet Map using OpenStreetMap
+        function initMap() {
+            map = L.map('map', {
+                zoomControl: false
+            }).setView([DEFAULT_LAT, DEFAULT_LNG], 13);
+
+            // OpenStreetMap Tile Layer
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            }).addTo(map);
+
+            // Add Zoom Control to Top Right
+            L.control.zoom({ position: 'topright' }).addTo(map);
+
+            // Map Click Event to Set Destination (Point B)
+            map.on('click', function(e) {
+                setDestination(e.latlng.lat, e.latlng.lng);
+            });
+        }
+
+        // Initialize Native Geolocation
+        function initGeolocation() {
+            if (!("geolocation" in navigator)) {
+                updateStatus("Geolocation not supported", "red");
+                return;
+            }
+
+            // Check for Secure Context
+            if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                updateStatus("HTTPS Required for Location Access", "amber");
+                console.warn("Geolocation requires a secure context (HTTPS or localhost).");
+            }
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 15000,
+                maximumAge: 0
+            };
+
+            watchId = navigator.geolocation.watchPosition(
+                (position) => {
+                    if (!isSimulating) {
+                        updateUserPosition(position.coords.latitude, position.coords.longitude);
+                    }
+                },
+                (error) => {
+                    console.warn("Geolocation error:", error.code, error.message);
+                    if (error.code === 1) {
+                        updateStatus("Location permission denied", "red");
+                    } else {
+                        updateStatus("GPS signal weak. Try moving outdoors.", "amber");
+                    }
+                },
+                options
+            );
+        }
+
+        // Update User Live Position Marker
+        function updateUserPosition(lat, lng, forceCenter = false) {
+            userPos = { lat, lng };
+
+            const customIcon = L.divIcon({
+                html: `
+                    <div class="user-location-pulse"></div>
+                    <div class="user-location-marker"></div>
+                    <div class="user-label">You</div>
+                `,
+                className: 'custom-user-container',
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
+            });
+
+            if (!userMarker) {
+                userMarker = L.marker([lat, lng], { icon: customIcon, zIndexOffset: 1000 }).addTo(map);
+                map.setView([lat, lng], 16);
+            } else {
+                userMarker.setLatLng([lat, lng]);
+                if (forceCenter) map.setView([lat, lng], 16);
+            }
+
+            updateStatus(isArmed ? "Tracking active & armed" : "Position located", "emerald");
+            calculateDistanceAndCheck();
+        }
+
+        // Set Marked Destination (Point B)
+        function setDestination(lat, lng) {
+            destPos = { lat, lng };
+
+            // Render/Move Destination Marker
+            if (destMarker) {
+                destMarker.setLatLng([lat, lng]);
+            } else {
+                const icon = L.divIcon({
+                    html: '<i class="fa-solid fa-location-dot text-3xl destination-marker"></i>',
+                    className: 'custom-dest-icon',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 30]
+                });
+                destMarker = L.marker([lat, lng], { icon: icon }).addTo(map);
+            }
+
+            // Render Arrival Radius Circle
+            if (radiusCircle) {
+                radiusCircle.setLatLng([lat, lng]);
+            } else {
+                radiusCircle = L.circle([lat, lng], {
+                    color: '#3b82f6',
+                    fillColor: '#60a5fa',
+                    fillOpacity: 0.25,
+                    radius: arrivalRadius
+                }).addTo(map);
+            }
+
+            calculateDistanceAndCheck();
+        }
+
+        // Clear Destination
+        function clearDestination() {
+            destPos = null;
+            if (destMarker) map.removeLayer(destMarker);
+            if (radiusCircle) map.removeLayer(radiusCircle);
+            if (geofenceLine) map.removeLayer(geofenceLine);
+            if (roadRouteLayer) map.removeLayer(roadRouteLayer);
+            destMarker = null;
+            radiusCircle = null;
+            geofenceLine = null;
+            roadRouteLayer = null;
+
+            document.getElementById('distance-val').innerText = "-- m";
+            document.getElementById('eta-val').innerText = "-- min";
+            updateStatus("Destination cleared", "slate");
+        }
+
+        // Haversine Formula for Distance Calculation (in Meters)
+        function getHaversineDistance(coords1, coords2) {
+            const R = 6371e3; // Earth radius in meters
+            const rad = Math.PI / 180;
+            const dLat = (coords2.lat - coords1.lat) * rad;
+            const dLon = (coords2.lng - coords1.lng) * rad;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(coords1.lat * rad) * Math.cos(coords2.lat * rad) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        // Calculate Distance, Route Polyline & Trigger Alarm Check
+        function calculateDistanceAndCheck() {
+            if (!userPos || !destPos) return;
+
+            const radialDistance = getHaversineDistance(userPos, BirdPos);
+            
+            // Render straight geofence line (dashed)
+            if (geofenceLine) {
+                geofenceLine.setLatLngs([[userPos.lat, userPos.lng], [destPos.lat, destPos.lng]]);
+            } else {
+                geofenceLine = L.polyline([[userPos.lat, userPos.lng], [destPos.lat, destPos.lng]], {
+                    color: '#3b82f6',
+                    dashArray: '6, 8',
+                    weight: 2,
+                    opacity: 0.5
+                }).addTo(map);
+            }
+
+            // Update UI with Radial Distance initially
+            updateStatsUI(radialDistance);
+
+            // Fetch Road Route (Throttled to every 3 seconds)
+            const now = Date.now();
+            if (now - lastRouteUpdate > 3000) {
+                updateRoadRoute();
+                lastRouteUpdate = now;
+            }
+
+            // Trigger Check (Always based on radial/crow-flies distance for safety)
+            if (isArmed && radialDistance <= arrivalRadius) {
+                triggerArrivalAlarm();
+            }
+        }
+
+        // Fetch Road Route from OSRM
+        async function updateRoadRoute() {
+            if (!userPos || !destPos) return;
+
+            try {
+                // Using 'foot' profile for walking routes
+                const url = `https://router.project-osrm.org/route/v1/foot/${userPos.lng},${userPos.lat};${destPos.lng},${destPos.lat}?overview=full&geometries=geojson`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.code === 'Ok' && data.routes.length > 0) {
+                    const route = data.routes[0];
+                    const coordinates = route.geometry.coordinates.map(c => [c[1], c[0]]);
+                    
+                    if (roadRouteLayer) {
+                        roadRouteLayer.setLatLngs(coordinates);
+                    } else {
+                        roadRouteLayer = L.polyline(coordinates, {
+                            color: '#10b981', // Emerald color for active route
+                            weight: 5,
+                            lineJoin: 'round',
+                            opacity: 0.8
+                        }).addTo(map);
+                    }
+                    
+                    // Update UI with more accurate road distance and walking ETA
+                    updateStatsUI(route.distance);
+                }
+            } catch (err) {
+                console.warn("Routing API error:", err);
+            }
+        }
+
+        // Update Distance and ETA in the UI
+        function updateStatsUI(distanceInMeters) {
+            const distDisplay = distanceInMeters > 1000 
+                ? (distanceInMeters / 1000).toFixed(2) + " km" 
+                : Math.round(distanceInMeters) + " m";
+            
+            document.getElementById('distance-val').innerText = distDisplay;
+
+            // Est. Walking Speed (~5 km/h = ~83m/min)
+            const walkingMinutes = Math.ceil(distanceInMeters / 83);
+            document.getElementById('eta-val').innerText = walkingMinutes + " min";
+        }
+
+        // Update Threshold Radius
+        function updateThreshold(val) {
+            arrivalRadius = parseInt(val, 10);
+            if (radiusCircle) {
+                radiusCircle.setRadius(arrivalRadius);
+            }
+            calculateDistanceAndCheck();
+        }
+
+        // Start Tracking / Arm Alarm Button Logic
+        async function startTrackingProcess() {
+            if (!destPos) {
+                alert("Please tap on the map or search to set a destination first!");
+                return;
+            }
+
+            // Unlock AudioContext for mobile browsers
+            await Tone.start();
+            isArmed = true;
+
+            const btn = document.getElementById('main-action-btn');
+            btn.className = "w-full py-3 px-4 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold rounded-xl shadow-lg transition flex items-center justify-center space-x-2";
+            btn.innerHTML = `<i class="fa-solid fa-shield-virus text-sm"></i><span>DISARM ALARM SYSTEM</span>`;
+            btn.onclick = disarmAlarm;
+
+            updateStatus("Alarm System Armed & Monitoring", "emerald");
+            calculateDistanceAndCheck();
+        }
+
+        // Disarm Alarm System
+        function disarmAlarm() {
+            isArmed = false;
+            const btn = document.getElementById('main-action-btn');
+            btn.className = "w-full py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2 transition";
+            btn.innerHTML = `<i class="fa-solid fa-play text-sm"></i><span>ARM LOCATION ALARM</span>`;
+            btn.onclick = startTrackingProcess;
+
+            updateStatus("Alarm Disarmed", "slate");
+        }
+
+        // Trigger Alarm Sound & Vibration
+        function triggerArrivalAlarm() {
+            document.getElementById('alarm-overlay').classList.remove('hidden');
+
+            // Synthesize Loud Alarm Sound using Tone.js
+            if (!alarmSynth) {
+                alarmSynth = new Tone.Synth({
+                    oscillator: { type: "sawtooth" },
+                    envelope: { attack: 0.05, decay: 0.1, sustain: 0.3, release: 0.1 }
+                }).toDestination();
+            }
+
+            if (!alarmLoop) {
+                alarmLoop = new Tone.Loop((time) => {
+                    alarmSynth.triggerAttackRelease("C6", "8n", time);
+                    alarmSynth.triggerAttackRelease("G5", "8n", time + 0.15);
+                }, "0.3s").start(0);
+            }
+            Tone.Transport.start();
+
+            // Trigger Phone Vibration Pattern
+            if ("vibrate" in navigator) {
+                navigator.vibrate([500, 250, 500, 250, 500, 250, 1000]);
+            }
+        }
+
+        // Stop Active Alarm
+        function stopAlarm() {
+            document.getElementById('alarm-overlay').classList.add('hidden');
+
+            if (alarmLoop) {
+                Tone.Transport.stop();
+                alarmLoop.stop();
+                alarmLoop.dispose();
+                alarmLoop = null;
+            }
+
+            if ("vibrate" in navigator) {
+                navigator.vibrate(0);
+            }
+
+            disarmAlarm();
+        }
+
+        // Simulation Mode (Step Towards Destination)
+        function toggleSimulationMode() {
+            isSimulating = !isSimulating;
+            const btn = document.getElementById('toggle-sim-btn');
+            const simControls = document.getElementById('sim-controls');
+
+            if (isSimulating) {
+                btn.className = "px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-900 border border-amber-400 flex items-center gap-1.5";
+                simControls.classList.remove('hidden');
+
+                // Set default user position near destination if not present
+                if (!userPos) {
+                    const startLat = destPos ? destPos.lat - 0.005 : DEFAULT_LAT;
+                    const startLng = destPos ? destPos.lng - 0.005 : DEFAULT_LNG;
+                    updateUserPosition(startLat, startLng);
+                }
+            } else {
+                btn.className = "px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-700/80 hover:bg-slate-700 text-slate-300 border border-slate-600 flex items-center gap-1.5";
+                simControls.classList.add('hidden');
+                initGeolocation(); // Re-engage real GPS
+            }
+        }
+
+        function stepSimulation() {
+            if (!userPos || !destPos) {
+                alert("Please set a Point B destination on the map first!");
+                return;
+            }
+
+            // Move 15% closer to destination each step
+            const newLat = userPos.lat + (destPos.lat - userPos.lat) * 0.25;
+            const newLng = userPos.lng + (destPos.lng - userPos.lng) * 0.25;
+            updateUserPosition(newLat, newLng);
+        }
+
+        // Nominatim OpenStreetMap Geocoding Search
+        function setupSearch() {
+            const input = document.getElementById('search-input');
+            let debounceTimer;
+
+            input.addEventListener('input', (e) => {
+                clearTimeout(debounceTimer);
+                const query = e.target.value.trim();
+                document.getElementById('clear-search-btn').classList.toggle('hidden', !query);
+
+                if (query.length < 3) {
+                    document.getElementById('search-results').classList.add('hidden');
+                    return;
+                }
+
+                debounceTimer = setTimeout(() => {
+                    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query + ', Philippines')}&limit=5`)
+                        .then(res => res.json())
+                        .then(data => displaySearchResults(data))
+                        .catch(err => console.error("Search error:", err));
+                }, 400);
+            });
+        }
+
+        function displaySearchResults(results) {
+            const container = document.getElementById('search-results');
+            container.innerHTML = '';
+
+            if (results.length === 0) {
+                container.classList.add('hidden');
+                return;
+            }
+
+            results.forEach(res => {
+                const item = document.createElement('div');
+                item.className = "p-3 hover:bg-slate-700/60 cursor-pointer transition flex items-center gap-2";
+                item.innerHTML = `<i class="fa-solid fa-location-dot text-slate-400"></i><span class="truncate">${res.display_name}</span>`;
+                item.onclick = () => {
+                    const lat = parseFloat(res.lat);
+                    const lon = parseFloat(res.lon);
+                    setDestination(lat, lon);
+                    map.setView([lat, lon], 15);
+                    container.classList.add('hidden');
+                };
+                container.appendChild(item);
+            });
+
+            container.classList.remove('hidden');
+        }
+
+        function clearSearch() {
+            document.getElementById('search-input').value = '';
+            document.getElementById('clear-search-btn').classList.add('hidden');
+            document.getElementById('search-results').classList.add('hidden');
+        }
+
+        // Recenter Map on User
+        function recenterMap() {
+            const icon = document.getElementById('recenter-icon');
+            icon.classList.add('fa-spin');
+            
+            if (userPos) {
+                map.setView([userPos.lat, userPos.lng], 16);
+                setTimeout(() => icon.classList.remove('fa-spin'), 600);
+            } else {
+                updateStatus("Requesting fresh GPS fix...", "amber");
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        updateUserPosition(position.coords.latitude, position.coords.longitude, true);
+                        icon.classList.remove('fa-spin');
+                    },
+                    (error) => {
+                        icon.classList.remove('fa-spin');
+                        alert("Could not find your location. Please ensure Location Services are enabled and you have allowed permission.");
+                        updateStatus("Location access failed", "red");
+                    },
+                    { enableHighAccuracy: false, timeout: 8000 }
+                );
+            }
+        }
+
+        // Helper Status UI Updater
+        function updateStatus(text, color) {
+            const statusText = document.getElementById('status-text');
+            const statusIndicator = document.getElementById('status-indicator');
+            statusText.innerText = text;
+
+            const colorMap = {
+                emerald: 'bg-emerald-500',
+                amber: 'bg-amber-500',
+                red: 'bg-red-500',
+                slate: 'bg-slate-500'
+            };
+            statusIndicator.className = `w-2.5 h-2.5 rounded-full ${colorMap[color] || 'bg-slate-500'}`;
+        }
+
+        // Modal Handlers
+        function openHelpModal() { document.getElementById('help-modal').classList.remove('hidden'); }
+        function closeHelpModal() { document.getElementById('help-modal').classList.add('hidden'); }
+    </script>
+</body>
+</html>
